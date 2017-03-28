@@ -29,7 +29,10 @@
 		};
 	</script>
 
+	<script src="../lib/canvas-to-blob.js"></script>
 	<script src="../lib/FileAPI.core.js"></script>
+	<script src="../lib/FileAPI.Image.js"></script>
+	<script src="../lib/FileAPI.Flash.js"></script>
 
   <script>    
 		// Simple JavaScript Templating
@@ -340,6 +343,139 @@
 			<i class="js-abort b-file__abort" title="abort">&times;</i>
 		</div>
 	</script>
+
+	<script id="b-layer-ejs" type="text/ejs">
+		<div class="b-layer">
+			<div class="b-layer__h1"><%=file.name%></div>
+			<div class="js-img b-layer__img"></div>
+			<div class="b-layer__info">
+				<%
+				FileAPI.each(info, function(val, key){
+					if( Object.prototype.toString.call(val) == '[object Object]' ){
+						var sub = '';
+						FileAPI.each(val, function (val, key){ sub += '<div>'+key+': '+val+'</div>'; });
+						if( sub ){
+							%><%=key%><div style="margin: 0 0 5px 20px;"><%=sub%></div><%
+						}
+					} else {
+				%>
+					<div><%=key%>: <%=val%></div>
+				<%
+					}
+				});
+				%>
+			</div>
+		</div>
+	</script>
+
+<script type="text/javascript">
+	jQuery(function($) {
+		if (!(FileAPI.support.cors || FileAPI.support.flash)) {
+			$('#oooops').show();
+			$('#buttons-panel').hide();
+		}
+
+		$(document).on('mouseenter mouseleave', '.b-button', function(evt) {
+			$(evt.currentTarget).toggleClass('b-button_hover', evt.type == 'mouseenter');
+		});
+
+		if (FileAPI.support.dnd) {
+			$('#drag-n-drop').show();
+			$(document).dnd(function(over) {
+				$('#drop-zone').toggle(over);
+			}, function(files) {
+				onFiles(files);
+			});
+		}
+
+		$('input[type="file"]').on('change', function(evt) {
+			
+			var files = FileAPI.getFiles(evt);
+			onFiles(files);
+			FileAPI.reset(evt.currentTarget);
+		});
+
+		var FU = {
+			icon: {
+				def:   '//cdn1.iconfinder.com/data/icons/CrystalClear/32x32/mimetypes/unknown.png'
+					, image: '//cdn1.iconfinder.com/data/icons/humano2/32x32/apps/synfig_icon.png'
+					, audio: '//cdn1.iconfinder.com/data/icons/august/PNG/Music.png'
+					, video: '//cdn1.iconfinder.com/data/icons/df_On_Stage_Icon_Set/128/Video.png'
+			},
+
+			files: [],
+			index: 0,
+			active: false,
+
+			add: function(file) {
+				FU.files.push(file);
+
+				if( /^image/.test(file.type)) {
+					FileAPI.Image(file).preview(35).rotate('auto').get(function(err, img) {
+						if (!err) {
+							FU._getEl(file, '.js-left')
+								.addClass('b-file__left_border')
+								.html(img)
+							;
+						}
+					});
+				}
+			},
+			getFileById: function(id) {
+
+			},
+
+			showLayer: function(id) {
+
+			},
+
+			start: function() {
+
+			},
+
+			abort: function(id) {
+
+			},
+
+			_getEl: function(file, sel) {
+				var $el = $('#file-' + FileAPI.uid(file));
+				return sel ? $el.find(sel) : $el;
+			},
+
+			_upload: function(file) {
+
+			},
+		};
+
+		function onFiles(files) {
+			var $Queue = $('<div/>').prependTo('#preview');
+
+			FileAPI.each(files, function(file) {
+				if (file.size >= 25 * FileAPI.MB) {
+					alert('Sorrow.\n Max size 25MB');
+				} else if (file.size === void 0) {					
+						$('#oooops').show();
+						$('#buttons-panel').hide();
+				} else {
+					$Queue.append(tmpl($('#b-file-ejs').html(), { file: file, icon: FU.icon }));
+
+					FU.add(file);
+					FU.start();
+				}
+			});
+		}
+
+		$(document)
+			.on('click', '.js-file', function(evt) {
+
+			})
+			.on('click', '.js-abort', function(evt) {
+
+			});
+
+	});
+
+</script>
 
 </body>
 </html>

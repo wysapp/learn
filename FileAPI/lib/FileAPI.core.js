@@ -38,12 +38,34 @@
 
     dataURLtoBlob = window.dataURLtoBlob,
 
+    _rimg = /img/i,
+    _rcanvas = /canvas/i,
+    _rimgcanvas = /img|canvas/i,
+    _rinput = /input/i,
+    _rdata = /^data:[^,]+,/i,
+
+
 
     _toString = {}.toString,
     _supportConsoleLog,
     _supportConsoleLogApply,
 
     Math = window.Math,
+
+    _SIZE_CONST = function(pow) {
+      pow = new window.Number(Math.pow(1024, pow));
+      pow.from = function(sz) { return Math.round(sz * this ); };
+      return pow;
+    },
+
+    _elEvents = {},   // element event listeners
+    _infoReader = [],   // list of file info processors
+
+    _readerEvents = 'abort progress error load loadend',
+    _xhrPropsExport = 'status statusText readyState response responseXML responseText responseBody'.split(' '),
+
+    currentTarget = 'currentTarget',
+    preventDefault = 'preventDefault',
 
 
     _isArray = function(ar) {
@@ -76,6 +98,54 @@
       }
 
       return dst;
+    },
+
+
+    _on = function(el, type, fn){
+      if (el) {
+        var uid = api.uid(el);
+        if (!_elEvents[uid]) {
+          _elEvents[uid ] = {};
+        }
+
+        var isFileReader = (FileReader && el) && ( el instanceof FileReader);
+
+        _each(type.split(/\s+/), function(type) {
+          if (jQuery && !isFileReader) {
+            jQuery.event.add(el, type, fn);
+          } else {
+            if (!_elEvents[uid][type]) {
+              _elEvents[uid][type] = [];
+            }
+
+            _elEvents[uid][type].push(fn);
+
+            if (el.addEventListener) { 
+              el.addEventListener(type, fn, false); 
+            } else if (el.attachEvent) {
+              el.attachEvent('on' + type, fn);
+            } else {
+              el['on' + type] = fn;
+            }
+          }
+        });
+      }
+    },
+
+    _off = function(el, type, fn) {
+
+    },
+
+    _one = function(el, type, fn) {
+
+    },
+
+    _fixEvent = function(evt) {
+      if (!evt.target) { evt.target = window.event && window.event.srcElement || document; }
+
+      if (evt.target.nodeType === 3) { evt.target = evt.target.parentNode; }
+
+      return evt;
     },
 
 
@@ -122,6 +192,18 @@
 				, 'audio/*': 'm4a flac aac rm mpa wav wma ogg mp3 mp2 m3u mod amf dmf dsm far gdm imf it m15 med okt s3m stm sfx ult uni xm sid ac3 dts cue aif aiff wpl ape mac mpc mpp shn wv nsf spc gym adplug adx dsp adp ymf ast afc hps xs'
 				, 'video/*': 'm4v 3gp nsv ts ty strm rm rmvb m3u ifo mov qt divx xvid bivx vob nrg img iso pva wmv asf asx ogm m2v avi bin dat dvr-ms mpg mpeg mp4 mkv avc vp3 svq3 nuv viv dv fli flv wpl'
 			},
+
+      uploadRetry: 0,
+      networkDownRetryTimeout: 5000,
+
+      chunkSize:0,
+      chunkUploadRetry: 0,
+      chunkNetworkDownRetryTimeout: 2000,
+
+      KB: _SIZE_CONST(1),
+      MB: _SIZE_CONST(2),
+      GB: _SIZE_CONST(3),
+      TB: _SIZE_CONST(4),
 
       EMPTY_PNG: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQIW2NkAAIAAAoAAggA9GkAAAAASUVORK5CYII=',
 
@@ -173,11 +255,227 @@
       },
 
       event: {
-        
+        on: _on,
+        off: _off,
+        one: _one,
+        fix: _fixEvent
       },
+
+
+      each: _each,
+
+
+      extend: _extend,
+
+
+      isFile: function(file) {
+        return _toString.call(file) === '[object File]';
+      },
+
+      isBlob: function(blob) {
+        return this.isFile(blob) || (_toString.call(blob) === '[object Blob]');
+      },
+
+      isCanvas: function(el) {
+        return el && _rcanvas.test(el.nodeName);
+      },
+
+
+      readAsImage: function(file, fn, progress) {
+        
+        if (api.isBlob(file)) {
+          if (apiURL) {
+            var data = apiURL.createObjectURL(file);
+            if(data === undef) {
+              _emit(file, fn, 'error');
+            } else {
+                     
+              api.readAsImage(data, fn, progress);
+            }
+          } else {
+            api.readAsDataURL(file, function(evt) {
+              if (evt.type == 'load' ) {
+                api.readAsImage(evt.result, fn, progress);
+              } else if (progress || evt.type == 'error' ) {
+                _emit(file, fn, evt, null, { loaded: evt.loaded, total: evt.total});
+              }
+            });
+          }
+        } else if (api.isCanvas(file)) {
+          _emit(file, fn, 'load', file);
+        } else if (_rimg.test(file.nodeName)) {
+          if (file.complete) {
+            _emit(file,fn,'load', file);
+          } else {
+            var events = 'error abort load';
+            _one(file, events, function _fn(evt) {
+              if (evt.type == 'load' && apiURL) {
+                apiURL.revokeObjectURL(file.src);
+              }
+
+              _off(file, events, _fn);
+              _emit(file, fn, evt, file);
+            });
+          }
+        } else if (file.iframe) {
+          _emit(file, fn, { type: 'error'});
+        } else {
+          
+          var img = api.newImage(file.dataURL || file);
+          api.readAsImage(img, fn, progress);
+        }
+      },
+
+
+      getFiles: function(input, filter, callback) {
+        var files = [];
+        if (callback) {
+          api.filterFiles(api.getFiles(input), filter, callback);
+          return null;
+        }
+
+        if (input.jquery) {
+          // jQuery object
+          input.each(function() {
+            files = files.concat(api.getFiles(this));
+          });
+          input = files;
+          files = [];
+        }
+
+        if (typeof filter == 'string') {
+          filter = api.getFilesFilter(filter);
+        }
+
+        if (input.originalEvent) {
+          // jQuery event 
+          input = _fixEvent(input.originalEvent);
+          
+        } else if (input.srcElement) {
+          // IE Event 
+          input = _fixEvent(input);
+        }
+
+        if (input.dataTransfer) {
+          // Drag 'n' Drop 
+          input = input.dataTransfer;
+        } else if (input.target) {
+          // Event 
+          input = input.target;
+        }
+
+        if (input.files) {
+          // Input[type="file"]
+          files = input.files;
+
+          if (!html5) {
+            files[0].blob = input;
+            files[0].iframe = true;
+          }
+        } else if (!html5 && isInputFile(input)) {
+          if (api.trim(input.value)) {
+            files = [api.checkFileObj(input.value)];
+            files[0].blob = input;
+            files[0].iframe = true;
+          }
+        } else if (_isArray(input)) {
+          files = input;
+        }
+
+        return api.filter(files, function(file) { return !filter || filter.test(file.name); });
+      },
+
+
+      getInfo: function(file, fn) {
+        var info = {}, readers = _infoReader.concat();
+        
+        if (api.isBlob(file)) {
+          (function _next() {
+            var reader = readers.shift();
+
+            if (reader) {
+              if (reader.test(file.type)) {
+                reader(file, function(err, res) {
+                  if (err){
+                    fn(err);
+                  } else {
+                    _extend(info, res);
+                    _next();
+                  }
+                });
+              } else {
+                _next();
+              }
+            } else {
+              fn(false, info);
+            }
+          })();
+        } else {
+          fn('not_support_info', info);
+        }
+      },
+
+      filter: function(input, fn) {
+        var result = [], i = 0, n = input.length, val;
+
+        for (; i < n; i++) {
+          if (i in input) {
+            val = input[i];
+            if (fn.call(val, val, i, input)) {
+              result.push(val);
+            }
+          }
+        }
+
+        return result;
+      },
+
+
+      reset: function(inp, notRemove) {
+        var parent, clone;
+
+        if (jQuery) {
+          clone = jQuery(inp).clone(true).insertBefore(inp).val('')[0];
+          if (!notRemove) {
+            jQuery(inp).remove();
+          }
+        } else {
+          parent = inp.parentNode;
+          clone = parent.insertBefore(inp.cloneNode(true), inp);
+          clone.value = '';
+
+          if (!notRemove) {
+            parent.removeChild(inp);
+          }
+
+          _each(_elEvents[api.uid(inp)], function(fns, type) {
+            _each(fns, function(fn) {
+              _off(inp, type, fn);
+              _on(clone, type, fn);
+            });
+          });
+        }
+
+        return clone;
+      }
 
     }
   ;
+
+
+  if (jQuery && !jQuery.fn.dnd) {
+    jQuery.fn.dnd = function(onHover, onDrop) {
+      return this.each(function() {
+        // api.event.dnd(this, onHover, onDrop);
+      });
+    };
+
+    jQuery.fn.offdnd = function(onHover, onDrop) {
+      return this.each(function() {
+        // api.event.dnd.of(this, onHover, onDrop);
+      });
+    }
+  }
 
 
   window.FileAPI = _extend(api, window.FileAPI);
