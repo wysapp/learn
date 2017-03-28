@@ -32,6 +32,7 @@
 	<script src="../lib/canvas-to-blob.js"></script>
 	<script src="../lib/FileAPI.core.js"></script>
 	<script src="../lib/FileAPI.Image.js"></script>
+	<script src="../lib/FileAPI.XHR.js"></script>
 	<script src="../lib/FileAPI.Flash.js"></script>
 
   <script>    
@@ -412,6 +413,7 @@
 
 				if( /^image/.test(file.type)) {
 					FileAPI.Image(file).preview(35).rotate('auto').get(function(err, img) {
+						
 						if (!err) {
 							FU._getEl(file, '.js-left')
 								.addClass('b-file__left_border')
@@ -430,7 +432,9 @@
 			},
 
 			start: function() {
-
+				if (!FU.active && (FU.active = FU.files.length > FU.index)) {
+					FU._upload(FU.files[FU.index]);
+				}
 			},
 
 			abort: function(id) {
@@ -443,7 +447,35 @@
 			},
 
 			_upload: function(file) {
+				if (file) {
+					file.xhr = FileAPI.upload({
+						url: '/upload',
+						files: { file: file },
+						upload: function() {
+							FU._getEl(file).addClass('b-file_upload');
+							FU._getEl(file, '.js-progress')
+								.css({ opacity: 0 }).show()
+								.animate({ opacity: 1}, 100)
+							;
+						},
+						progress: function(evt) {
+							FU._getEl(file, '.js-bar').css('width', evt.loaded / evt.total * 100 + '%');
+						},
+						complete: function(err, xhr) {
+							var state = err ? 'error' : 'done';
 
+							FU._getEl(file).removeClass('b-file_upload');
+							FU._getEl(file, '.js-progress').animate({ opacity: 0}, 200, function() { $(this).hide() });
+
+							FU._getEl(file, '.js-info').append(', <b class="b-file__' + state + '">' + (err ? (xhr.statusText || err) : state) + '</b>');
+
+							FU.index++;
+							FU.active = false;
+
+							FU.start();
+						}
+					})
+				}
 			},
 		};
 

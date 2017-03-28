@@ -133,11 +133,40 @@
     },
 
     _off = function(el, type, fn) {
+      if ( el ) {
+        var uid = api.uid(el), events = _elEvents[uid] || {};
 
+        var isFileReader = (FileReader && el) && (el instanceof FileReader);
+        _each(type.split(/\s+/), function(type) {
+          if (jQuery && !isFileReader) {
+            jQuery.event.remove(el, type, fn);
+          } else {
+            var fns = events[type] || [], i = fns.length;
+
+            while(i--) {
+              if (fns[i] === fn) {
+                fns.splice(i, 1);
+                break;
+              }
+            }
+
+            if (el.addEventListener) { 
+              el.removeEventListener(type, fn, false); 
+            } else if (el.detachEvent) {
+              el.detachEvent('on' + type, fn);
+            } else {
+              el['on' + type] = null;
+            }
+          }
+        });
+      }
     },
 
     _one = function(el, type, fn) {
-
+      _on(el, type, function _(evt) {
+        _off(el, type, _);
+        fn(evt);
+      });
     },
 
     _fixEvent = function(evt) {
@@ -226,6 +255,19 @@
         }
       },
 
+      newImage: function(src, fn) {
+        var img = document.createElement('img');
+        if (fn) {
+          api.event.one(img, 'error load', function(evt) {
+            fn(evt.type == 'error', img);
+            img = null;
+          });
+        }
+
+        img.src = src;
+        return img;
+      },
+
       getXHR: function() {
         var xhr;
 
@@ -261,6 +303,54 @@
         fix: _fixEvent
       },
 
+      F: function() {},
+
+
+      trim: function(str) {
+        str = String(str);
+        return str.trim ? str.trim() : str.replace(/^\s+|\s+$/g, '');
+      },
+
+
+      queue: function(fn) {
+        var 
+          _idx = 0,
+          _length = 0,
+          _fail = false,
+          _end = false,
+          queue = {
+            inc: function() {
+              _length++;
+            },
+            next: function() {
+              _idx++;
+              setTimeout(queue.check, 0);
+            },
+
+            check: function() {
+              (_idx >= _length) && !_fail && queue.end();
+            },
+
+            isFail: function() {
+              return _fail;
+            },
+
+            fail: function() {
+              !_fail && fn(_fail = true)
+            },
+
+            end: function() {
+              if (!_end) {
+                _end = true;
+                fn();
+              }
+            }
+          }
+        ;
+
+        return queue;
+      },
+
 
       each: _each,
 
@@ -281,50 +371,59 @@
       },
 
 
-      readAsImage: function(file, fn, progress) {
-        
-        if (api.isBlob(file)) {
-          if (apiURL) {
-            var data = apiURL.createObjectURL(file);
-            if(data === undef) {
-              _emit(file, fn, 'error');
-            } else {
-                     
-              api.readAsImage(data, fn, progress);
-            }
-          } else {
-            api.readAsDataURL(file, function(evt) {
-              if (evt.type == 'load' ) {
-                api.readAsImage(evt.result, fn, progress);
-              } else if (progress || evt.type == 'error' ) {
-                _emit(file, fn, evt, null, { loaded: evt.loaded, total: evt.total});
-              }
-            });
-          }
-        } else if (api.isCanvas(file)) {
-          _emit(file, fn, 'load', file);
-        } else if (_rimg.test(file.nodeName)) {
-          if (file.complete) {
-            _emit(file,fn,'load', file);
-          } else {
-            var events = 'error abort load';
-            _one(file, events, function _fn(evt) {
-              if (evt.type == 'load' && apiURL) {
-                apiURL.revokeObjectURL(file.src);
-              }
+      readAsImage: function (file, fn, progress){
 
-              _off(file, events, _fn);
-              _emit(file, fn, evt, file);
-            });
-          }
-        } else if (file.iframe) {
-          _emit(file, fn, { type: 'error'});
-        } else {
-          
-          var img = api.newImage(file.dataURL || file);
-          api.readAsImage(img, fn, progress);
-        }
-      },
+				if( api.isBlob(file) ){
+					if( apiURL ){
+						/** @namespace apiURL.createObjectURL */
+						var data = apiURL.createObjectURL(file);
+						if( data === undef ){
+							_emit(file, fn, 'error');
+						}
+						else {
+							api.readAsImage(data, fn, progress);
+						}
+					}
+					else {
+						api.readAsDataURL(file, function (evt){
+							if( evt.type == 'load' ){
+								api.readAsImage(evt.result, fn, progress);
+							}
+							else if( progress || evt.type == 'error' ){
+								_emit(file, fn, evt, null, { loaded: evt.loaded, total: evt.total });
+							}
+						});
+					}
+				}
+				else if( api.isCanvas(file) ){
+					_emit(file, fn, 'load', file);
+				}
+				else if( _rimg.test(file.nodeName) ){
+					if( file.complete ){
+						_emit(file, fn, 'load', file);
+					}
+					else {
+						var events = 'error abort load';
+						_one(file, events, function _fn(evt){
+							if( evt.type == 'load' && apiURL ){
+								/** @namespace apiURL.revokeObjectURL */
+								apiURL.revokeObjectURL(file.src);
+							}
+
+							_off(file, events, _fn);
+							_emit(file, fn, evt, file);
+						});
+					}
+				}
+				else if( file.iframe ){
+					_emit(file, fn, { type: 'error' });
+				}
+				else {
+					// Created image
+					var img = api.newImage(file.dataURL || file);
+					api.readAsImage(img, fn, progress);
+				}
+			},
 
 
       getFiles: function(input, filter, callback) {
@@ -431,6 +530,140 @@
       },
 
 
+      upload: function(options) {
+        options = _extend({
+          jsonp: 'callback',
+          prepare: api.F,
+          beforeupload: api.F,
+          upload: api.F,
+          fileupload: api.F,
+          fileprogress: api.F,
+          filecomplete: api.F,
+          progress: api.F,
+          complete: api.F,
+          pause: api.F,
+          imageOriginal: true,
+          chunkSize: api.chunkSize,
+          chunkUploadRetry: api.chunkUploadRetry,
+          uploadRetry: api.uploadRetry
+        }, options);
+
+        if (options.imageAutoOrientation && !options.imageTransform) {
+          options.imageTransform = { rotate: 'auto'};
+        }
+
+        var 
+          proxyXHR = new api.XHR(options),
+          dataArray = this._getFilesDataArray(options.files),
+          _this = this,
+          _total = 0,
+          _loaded = 0,
+          _nextFile,
+          _complete = false 
+        ;
+
+        console.log('ssssssssssssssssssssss', proxyXHR);
+
+        _each(dataArray, function(data) {
+          _total += data.size;
+        });
+
+        proxyXHR.files = [];
+        _each(dataArray, function(data) {
+          proxyXHR.files.push(data.file);
+        });
+
+        proxyXHR.total = _total;
+        proxyXHR.loaded = 0;
+        proxyXHR.filesLeft = dataArray.length;
+
+        // Upload "beforeupload" event
+        options.beforeupload(proxyXHR, options);
+
+        // Upload by file 
+        _nextFile = function() {
+          var 
+            data = dataArray.shift(),
+            _file = data && data.file,
+            _fileLoaded = false,
+            _fileOptions = _simpleClone(options)
+          ;
+
+          proxyXHR.filesLeft = dataArray.length;
+
+          if (_file && _file.name === api.expando) {
+            _file = null;
+            api.log('[warn] FileAPI.upload() - called without files');
+          }
+
+          if ((proxyXHR.statusText != 'abort' || proxyXHR.current) && data) {
+
+            _complete = false;
+            proxyXHR.currentFile = _file;
+
+            if(_file && options.prepare(_file, _fileOptions) === false) {
+              _nextFile.call(_this);
+              return;
+            }
+
+            _fileOptions.file = _file;
+
+            _this._getFormData(_fileOptions, data, function(form) {
+
+            })
+          }
+
+        }
+        
+
+
+
+
+      },
+
+
+      _getFilesDataArray: function(data) {
+        var files = [], oFiles = {};
+
+        if (isInputFile(data)) {
+          var tmp = api.getFiles(data);
+
+          oFiles[data.name || 'file'] = data.getAttribute('multiple') !== null ? tmp : tmp[0];
+        } else if (_isArray(data) && isInputFile(data[0])) {
+          _each(data, function(input) {
+            oFiles[input.name || 'file'] = api.getFiles(input);
+          });
+        } else {
+          oFiles = data;
+        }
+
+        _each(oFiles, function add(file, name) {
+          
+          if (_isArray(file)) {
+            _each(file, function(file) {
+              add(file, name);
+            });
+          } else if ( file && (file.name || file.image)) {
+            files.push({
+              name: name,
+              file: file,
+              size: file.size,
+              total: file.size,
+              loaded: 0
+            });
+          }
+        });
+
+        if (!files.length) {
+          // Create fake `file` object 
+          files.push({ file: { name: api.expando }});
+        }
+        
+        console.log('vvvvvvvvvvvvvvvvvvvvvvvv', files);
+        return files;
+      },
+
+
       reset: function(inp, notRemove) {
         var parent, clone;
 
@@ -459,8 +692,38 @@
         return clone;
       }
 
-    }
+    } // api
   ;
+
+  function _emit(target, fn, name, res, ext) {
+    var evt = {
+      type: name.type || name,
+      target: target,
+      result: res
+    };
+
+    _extend(evt, ext);
+    fn(evt);
+  }
+
+
+  function _simpleClone(obj) {
+    var copy = {};
+    _each(obj, function(val, key) {
+      if (val && (typeof val === 'object') && (val.nodeType === void 0)) {
+        val = _extend({}, val);
+      }
+      copy[key] = val;
+    });
+
+    return copy;
+  }
+
+
+  function isInputFile(el) {
+    return _rinput.test(el && el.tagName);
+  }
+
 
 
   if (jQuery && !jQuery.fn.dnd) {
@@ -486,5 +749,10 @@ console.log('wwwwwwwwwwwwwwwwwwww', window.FileAPI);
   api.log('protocol: ' + window.location.protocol);
 	api.log('doctype: [' + doctype.name + '] ' + doctype.publicId + ' ' + doctype.systemId);
 
+  // Configuration
+  try {
+    _supportConsoleLog = !!console.log;
+    _supportConsoleLogApply = !!console.log.apply;
+  } catch(err) {}
 
 })(window, void 0);

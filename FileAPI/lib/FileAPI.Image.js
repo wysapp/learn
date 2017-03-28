@@ -100,8 +100,183 @@
     },
 
 
+    _apply: function(image, fn) {
+      var 
+        canvas = getCanvas(),
+        m = this.getMatrix(image),
+        ctx = canvas.getContext('2d'),
+        width = image.videoWidth || image.width,
+        height = image.videoHeight || image.height,
+        deg = m.deg,
+        dw = m.dw,
+        dh = m.dh,
+        w = width,
+        h = height,
+        filter = m.filter,
+        copy,  // canvas copy 
+        buffer = image,
+        overlay = m.overlay,
+        queue = api.queue(function() { image.src = api.EMPTY_PNG; fn(false, canvas); }),
+        renderImageToCanvas = api.renderImageToCanvas
+      ;
+
+      // Normalize angle
+			deg = deg - Math.floor(deg/360)*360;
+
+			// For `renderImageToCanvas`
+			image._type = this.file.type;
+
+			while(m.multipass && min(w/dw, h/dh) > 2 ){
+				w = (w/2 + 0.5)|0;
+				h = (h/2 + 0.5)|0;
+
+				copy = getCanvas();
+				copy.width  = w;
+				copy.height = h;
+
+				if( buffer !== image ){
+					renderImageToCanvas(copy, buffer, 0, 0, buffer.width, buffer.height, 0, 0, w, h);
+					buffer = copy;
+				}
+				else {
+					buffer = copy;
+					renderImageToCanvas(buffer, image, m.sx, m.sy, m.sw, m.sh, 0, 0, w, h);
+					m.sx = m.sy = m.sw = m.sh = 0;
+				}
+			}
+
+
+			canvas.width  = (deg % 180) ? dh : dw;
+			canvas.height = (deg % 180) ? dw : dh;
+
+			canvas.type = m.type;
+			canvas.quality = m.quality;
+
+			ctx.rotate(deg * Math.PI / 180);
+			renderImageToCanvas(ctx.canvas, buffer
+				, m.sx, m.sy
+				, m.sw || buffer.width
+				, m.sh || buffer.height
+				, (deg == 180 || deg == 270 ? -dw : 0)
+				, (deg == 90 || deg == 180 ? -dh : 0)
+				, dw, dh
+			);
+			dw = canvas.width;
+			dh = canvas.height;
+
+			// Apply overlay
+			overlay && api.each([].concat(overlay), function (over){
+				queue.inc();
+				// preload
+				var img = new window.Image, fn = function (){
+					var
+						  x = over.x|0
+						, y = over.y|0
+						, w = over.w || img.width
+						, h = over.h || img.height
+						, rel = over.rel
+					;
+
+					// center  |  right  |  left
+					x = (rel == 1 || rel == 4 || rel == 7) ? (dw - w + x)/2 : (rel == 2 || rel == 5 || rel == 8 ? dw - (w + x) : x);
+
+					// center  |  bottom  |  top
+					y = (rel == 3 || rel == 4 || rel == 5) ? (dh - h + y)/2 : (rel >= 6 ? dh - (h + y) : y);
+
+					api.event.off(img, 'error load abort', fn);
+
+					try {
+						ctx.globalAlpha = over.opacity || 1;
+						ctx.drawImage(img, x, y, w, h);
+					}
+					catch (er){}
+
+					queue.next();
+				};
+
+				api.event.on(img, 'error load abort', fn);
+				img.src = over.src;
+
+				if( img.complete ){
+					fn();
+				}
+			});
+
+			if( filter ){
+				queue.inc();
+				Image.applyFilter(canvas, filter, queue.next);
+			}
+
+			queue.check();
+
+    },
+
+
+    getMatrix: function (image){
+			var
+				  m  = api.extend({}, this.matrix)
+				, sw = m.sw = m.sw || image.videoWidth || image.naturalWidth ||  image.width
+				, sh = m.sh = m.sh || image.videoHeight || image.naturalHeight || image.height
+				, dw = m.dw = m.dw || sw
+				, dh = m.dh = m.dh || sh
+				, sf = sw/sh, df = dw/dh
+				, strategy = m.resize
+			;
+
+			if( strategy == 'preview' ){
+				if( dw != sw || dh != sh ){
+					// Make preview
+					var w, h;
+
+					if( df >= sf ){
+						w	= sw;
+						h	= w / df;
+					} else {
+						h	= sh;
+						w	= h * df;
+					}
+
+					if( w != sw || h != sh ){
+						m.sx	= ~~((sw - w)/2);
+						m.sy	= ~~((sh - h)/2);
+						sw		= w;
+						sh		= h;
+					}
+				}
+			}
+			else if( strategy == 'height' ){
+				dw = dh * sf;
+			}
+			else if( strategy == 'width' ){
+				dh = dw / sf;
+			}
+			else if( strategy ){
+				if( !(sw > dw || sh > dh) ){
+					dw = sw;
+					dh = sh;
+				}
+				else if( strategy == 'min' ){
+					dw = round(sf < df ? min(sw, dw) : dh*sf);
+					dh = round(sf < df ? dw/sf : min(sh, dh));
+				}
+				else {
+					dw = round(sf >= df ? min(sw, dw) : dh*sf);
+					dh = round(sf >= df ? dw/sf : min(sh, dh));
+				}
+			}
+
+			m.sw = sw;
+			m.sh = sh;
+			m.dw = dw;
+			m.dh = dh;
+			m.multipass = api.multiPassResize;
+			return	m;
+		},
+
+
     _trans: function(fn) {
       this._load(this.file, function(err, image) {
+        console.log('sssssssssssssssssssss', image);
         if (err) {
           fn(err);
         } else {
@@ -142,6 +317,19 @@
       return this.get(fn);
     }
   }
+
+  /**
+	 * For load-image-ios.js
+	 */
+  api.renderImageToCanvas = function(canvas, img, sx, sy, sw, sh, dx, dy, dw, dh) {
+    try {
+      return canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+    } catch (ex) {
+      api.log('renderImageToCanvas failed');
+      throw ex;
+    }
+  };
+
 
   // @export
   api.support.canvas = api.support.transform = support;
