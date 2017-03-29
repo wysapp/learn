@@ -303,6 +303,22 @@
         fix: _fixEvent
       },
 
+      throttle: function(fn, delay) {
+        var id, args;
+
+        return function _throttle() {
+          args = arguments;
+
+          if (!id) {
+            fn.apply(window, args);
+            id = setTimeout(function() {
+              id = 0;
+              fn.apply(window, args);
+            }, delay);
+          }
+        };
+      },
+
       F: function() {},
 
 
@@ -609,15 +625,122 @@
             _fileOptions.file = _file;
 
             _this._getFormData(_fileOptions, data, function(form) {
+              if (!_loaded) {
+                // emit "upload" event 
+                options.upload(proxyXHR, options);
+              }
 
-            })
+              var xhr = new api.XHR(_extend({}, _fileOptions, {
+                upload: _file ? function() {
+                  // emit fileupload event 
+                  options.fileupload(_file, xhr, _fileOptions);
+                } : noop,
+
+                progress: _file ? function(evt) {
+                  if (!_fileLoaded) {
+                    _fileLoaded = (evt.loaded === evt.total);
+
+                    options.fileprogress({
+                      type: 'progress',
+                      total: data.total = evt.total,
+                      loaded: data.loaded = evt.loaded
+                    }, _file, xhr, _fileOptions);
+
+                    // emit progress event 
+                    options.progress({
+                      type: 'progress',
+                      total: _total,
+                      loaded: proxyXHR.loaded = (_loaded + data.size * (evt.loaded/evt.total)) || 0
+                    }, _file, xhr, _fileOptions);
+                  }
+                } : noop,
+
+                complete: function(err) {
+                  _each(_xhrPropsExport, function(name) {
+                    proxyXHR[name] = xhr[name];
+                  });
+
+                  if (_file) {
+                    data.total = (data.total || data.size);
+                    data.loaded = data.total;
+
+                    if (!err) {
+                      this.progress(data);
+
+                      _fileLoaded = true;
+
+                      _loaded += data.size; // data.size != data.total, its desirable fix this
+                      proxyXHR.loaded = _loaded;
+                    }
+
+                    // emit filecomplete event 
+                    options.filecomplete(err, xhr, _file, _fileOptions);
+                  }
+
+                  // upload next file 
+                  setTimeout(function() {_nextFile.call(_this);}, 0);
+                }
+
+              })); //xhr
+
+              proxyXHR.abort = function(current) {
+                if (!current) { dataArray.length = 0; }
+                this.current = current;
+                xhr.abort();
+              };
+
+              // start upload
+              xhr.send(form);
+            });
+          } else {
+            var successful = proxyXHR.status == 200 || proxyXHR.status == 201 || proxyXHR.status == 204;
+            options.complete(successful ? false : (proxyXHR.statusText || 'error'), proxyXHR, options);
+
+            // Mark done state 
+            _complete = true;
           }
 
-        }
+        };
+
+        // Next tick
+        setTimeout(_nextFile, 0);
         
+        // Append more files to the existing request
+				// first - add them to the queue head/tail
+        proxyXHR.append = function(files, first) {
+          files = api._getFilesDataArray([].concat(files));
 
+          _each(files, function(data) {
+            _total += data.size;
+            proxyXHR.files.push(data.file);
+            if (first) {
+              dataArray.unshift(data);
+            } else {
+              dataArray.push(data);
+            }
+          });
 
+          proxyXHR.statusText = '';
 
+          if (_complete) {
+            _nextFile.call(_this);
+          }
+        };
+
+        // Removes file from queue by file reference and returns it
+        proxyXHR.remove = function(file) {
+          var i = dataArray.length,  _file;
+
+          while(i--) {
+            if(dataArray[i].file == file) {
+              _file = dataArray.splice(i, 1);
+              _total -= _file.size;
+            }
+          }
+          return _file;
+        };
+
+        return proxyXHR;
 
       },
 
@@ -661,6 +784,44 @@
         
         console.log('vvvvvvvvvvvvvvvvvvvvvvvv', files);
         return files;
+      },
+
+      _getFormData: function(options, data, fn) {
+        var 
+          file = data.file,
+          name = data.name,
+          filename = file.name,
+          filetype = file.type,
+          trans = api.support.transform && options.imageTransform,
+          Form = new api.Form,
+          queue = api.queue(function() { fn(Form); }),
+          isOrignTrans = trans && _isOriginTransform(trans),
+          postNameConcat = api.postNameConcat
+        ;
+
+        _each(options.data, function add(val, name) {
+          if (typeof val == 'object') {
+            _each(val, function(v, i) {
+              add(v, postNameConcat(name, i));
+            });
+          } else {
+            Form.append(name, val);
+          }
+        });
+
+        (function _addFile(file) {
+          if (file.image) {   // This is a FileAPI.Image
+            queue.inc();
+
+            
+          } else if (api.Image && trans && (/^image/.test(file.type) || _rimgcanvas.test(file.nodeName))) {
+
+          } else if (filename !== api.expando) {
+            Form.append(name, file, filename);
+          }
+        })(file);
+
+        queue.check();
       },
 
 
